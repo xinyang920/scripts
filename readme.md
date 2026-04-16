@@ -11,6 +11,11 @@ sysctl -p
 sysctl net.ipv4.tcp_available_congestion_control
 lsmod | grep bbr
 ```
+#### Hysteria2 一键安装命令
+```
+wget -N --no-check-certificate https://raw.githubusercontent.com/nbw-dev/scripts/refs/heads/main/Hysteria2.sh && bash Hysteria2.sh
+```
+
 #### vless+reality 一键安装命令
 ```
 apt update && wget -N --no-check-certificate https://github.com/nbw-dev/scripts/raw/refs/heads/main/v2ray-reality/install.sh && chmod +x install.sh && ./install.sh
