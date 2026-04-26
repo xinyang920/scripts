@@ -1,10 +1,10 @@
 #!/bin/bash
 # nbw-xray-reality-install.sh
-# 一键部署 Xray Reality 节点，同时生成 Clash 和 V2Ray 订阅链接
+# 一键部署 Xray Reality 节点，仅生成本地离线导入信息
 # 系统要求：Linux 发行版
 # Ubuntu: 20.04, 22.04, 24.04 及更高版本（推荐）
 # Debian: 12 及更高版本
-# by 南波丸 @nbw_one
+# by 南波丸 @nbw_one (modified)
 
 set -e
 
@@ -30,14 +30,14 @@ echo -e "${GREEN}   南波丸 Xray Reality 一键安装脚本${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 
-echo -e "${GREEN}[1/6] 安装依赖...${NC}"
+echo -e "${GREEN}[1/5] 安装依赖...${NC}"
 apt update -y
-apt install -y curl openssl nginx bc qrencode
+apt install -y curl openssl bc qrencode
 
-echo -e "${GREEN}[2/6] 安装 Xray...${NC}"
+echo -e "${GREEN}[2/5] 安装 Xray...${NC}"
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
-echo -e "${GREEN}[3/6] 生成 Reality 密钥对 & 选择最佳 SNI...${NC}"
+echo -e "${GREEN}[3/5] 生成 Reality 密钥对 & 选择最佳 SNI...${NC}"
 
 # 选择最佳 SNI
 SNI_LIST=("www.microsoft.com" "www.apple.com" "www.yahoo.com" "www.samsung.com" "www.amazon.com" "www.amd.com" "www.nvidia.com" "www.intel.com" "www.python.org")
@@ -61,12 +61,11 @@ echo "x25519 原始输出:"
 echo "$KEYS"
 echo "---"
 
-# 直接用 sed 提取 (适配 PrivateKey: xxx 格式)
+# 提取密钥
 PRIVATE_KEY=$(printf '%s\n' "$KEYS" | awk -F': ' '/^PrivateKey:|^Private key:/ {print $2; exit}')
 PUBLIC_KEY=$(printf '%s\n' "$KEYS" | awk -F': ' '/^Password \(PublicKey\):|^PublicKey:|^Public key:/ {print $2; exit}')
 
-
-# 如果上面没提取到，尝试旧格式 (Private key: xxx)
+# 兼容旧格式
 if [[ -z "$PRIVATE_KEY" ]]; then
     PRIVATE_KEY=$(echo "$KEYS" | sed -n 's/.*Private key: *\([^ ]*\).*/\1/p' | head -1)
 fi
@@ -83,7 +82,7 @@ if [[ -z "$PRIVATE_KEY" ]] || [[ -z "$PUBLIC_KEY" ]]; then
     exit 1
 fi
 
-echo -e "${GREEN}[4/6] 写入 Xray 配置...${NC}"
+echo -e "${GREEN}[4/5] 写入 Xray 配置...${NC}"
 cat > /usr/local/etc/xray/config.json << EOF
 {
   "log": {
@@ -122,35 +121,18 @@ cat > /usr/local/etc/xray/config.json << EOF
 }
 EOF
 
-echo -e "${GREEN}[5/6] 启动 Xray 服务...${NC}"
+echo -e "${GREEN}[5/5] 启动 Xray 服务...${NC}"
 systemctl restart xray
 systemctl enable xray
 
 # 获取服务器IP
 SERVER_IP=$(curl -s4 ip.sb 2>/dev/null || curl -s6 ip.sb 2>/dev/null || curl -s ifconfig.me)
 
-echo -e "${GREEN}[6/6] 生成订阅文件...${NC}"
-
-# 创建订阅目录
-SUBSCRIBE_DIR="/var/www/subscribe"
-mkdir -p ${SUBSCRIBE_DIR}
-SUBSCRIBE_TOKEN=$(openssl rand -hex 16)
-
-# ============================================
-# V2Ray 订阅 (Base64 编码的 VLESS 链接)
-# ============================================
+# 生成 VLESS 链接
 VLESS_LINK="vless://${UUID}@${SERVER_IP}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${BEST_SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp#Reality-${SERVER_IP}"
 
-echo "${VLESS_LINK}" | base64 -w 0 > "${SUBSCRIBE_DIR}/${SUBSCRIBE_TOKEN}.txt"
-
-# 生成 VLESS 二维码图片 (网页端查看)
-qrencode -o "${SUBSCRIBE_DIR}/${SUBSCRIBE_TOKEN}_vless.png" "${VLESS_LINK}"
-
-# ============================================
-# Clash Meta 订阅 (YAML 格式)
-# ============================================
-CLASH_SUB_URL="http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.yaml"
-cat > "${SUBSCRIBE_DIR}/${SUBSCRIBE_TOKEN}.yaml" << EOF
+# 生成本地 Clash Meta 配置文件（离线手动导入）
+cat > /root/clash-meta-reality.yaml << EOF
 mixed-port: 7890
 allow-lan: true
 mode: rule
@@ -202,46 +184,15 @@ rules:
   - MATCH,🚀 节点选择
 EOF
 
-# 生成订阅二维码图片
-qrencode -o "${SUBSCRIBE_DIR}/${SUBSCRIBE_TOKEN}_clash_sub.png" "${CLASH_SUB_URL}"
-V2RAY_SUB_URL="http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.txt"
-qrencode -o "${SUBSCRIBE_DIR}/${SUBSCRIBE_TOKEN}_v2ray_sub.png" "${V2RAY_SUB_URL}"
-
-# ============================================
-# 配置 Nginx
-# ============================================
-cat > /etc/nginx/sites-available/subscribe << EOF
-server {
-    listen 8080;
-    server_name _;
-    
-    location /sub/ {
-        alias ${SUBSCRIBE_DIR}/;
-        types {
-            text/yaml yaml yml;
-            text/plain txt;
-            image/png png;
-        }
-        default_type text/plain;
-        add_header Access-Control-Allow-Origin *;
-    }
-}
-EOF
-
-ln -sf /etc/nginx/sites-available/subscribe /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-nginx -t && systemctl restart nginx
-systemctl enable nginx
+# 生成本地二维码图片（仅本机保存，不对外提供）
+qrencode -o /root/vless-reality.png "${VLESS_LINK}"
 
 # 开放防火墙端口
 if command -v ufw &> /dev/null; then
     ufw allow ${PORT}/tcp
-    ufw allow 8080/tcp
 fi
 
-# ============================================
 # 输出信息
-# ============================================
 echo ""
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}           部署完成！${NC}"
@@ -258,26 +209,19 @@ echo "Fingerprint: chrome"
 echo "Flow:        xtls-rprx-vision"
 echo ""
 echo -e "${GREEN}============================================${NC}"
-echo -e "${YELLOW}【VLESS 链接】${NC} (复制到 v2rayN / v2rayNG)"
+echo -e "${YELLOW}【VLESS 链接】${NC} (复制到 v2rayN / v2rayNG / Shadowrocket)"
 echo -e "${GREEN}============================================${NC}"
 echo "${VLESS_LINK}"
 echo ""
-echo -e "${YELLOW}扫描下方二维码直接导入 VLESS (手机端用):${NC}"
+echo -e "${YELLOW}扫描下方二维码直接导入 VLESS (仅本地离线使用):${NC}"
 qrencode -t ansiutf8 "${VLESS_LINK}"
 echo ""
 echo -e "${GREEN}============================================${NC}"
-echo -e "${YELLOW}【订阅链接】${NC}"
+echo -e "${YELLOW}【本地离线文件】${NC}"
 echo -e "${GREEN}============================================${NC}"
-echo ""
-echo -e "${YELLOW}V2Ray 订阅 (v2rayN / v2rayNG / Shadowrocket):${NC}"
-echo "链接: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.txt"
-echo "二维码: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}_v2ray_sub.png"
-qrencode -t ansiutf8 "http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.txt"
-echo ""
-echo -e "${YELLOW}Clash 订阅 (Clash Meta / FlClash / Clash Verge):${NC}"
-echo "链接: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.yaml"
-echo "二维码: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}_clash_sub.png"
-qrencode -t ansiutf8 "http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.yaml"
+echo "节点信息文件: /root/xray-info.txt"
+echo "Clash Meta 配置: /root/clash-meta-reality.yaml"
+echo "VLESS 二维码图片: /root/vless-reality.png"
 echo ""
 echo -e "${YELLOW}电报 Telegram 交流群:${NC}"
 echo "TG: @nbw_club"
@@ -303,13 +247,9 @@ Flow:        xtls-rprx-vision
 【VLESS 链接】
 ${VLESS_LINK}
 
-【V2Ray 订阅】
-链接: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.txt
-二维码: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}_v2ray_sub.png
-
-【Clash 订阅】
-链接: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}.yaml
-二维码: http://${SERVER_IP}:8080/sub/${SUBSCRIBE_TOKEN}_clash_sub.png
+【本地离线文件】
+Clash Meta 配置: /root/clash-meta-reality.yaml
+VLESS 二维码图片: /root/vless-reality.png
 
 【作者联系方式】
 TG: @nbw_club
